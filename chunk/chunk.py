@@ -1,5 +1,4 @@
 import os
-import sys
 import errno
 import json
 import math
@@ -18,15 +17,16 @@ from rasterio._io import virtual_file_to_buffer
 
 APP_NAME = "Raster Foundry Tiler Chunk"
 TILE_DIM = 1024
-OUTPUT_FILE_NAME = "step1_result.json"
-STATUS_QUEUE = "https://sqs.us-east-1.amazonaws.com/670261699094/rf-server-tiler-status"  # NOQA
 STATUS_QUEUE_REGION = "us-east-1"
 
 
-def notify(m):
+def notify(queue_url, m):
+    if not queue_url:
+        return
+
     client = boto3.client('sqs', region_name=STATUS_QUEUE_REGION)
     res = client.send_message(
-        QueueUrl=STATUS_QUEUE,
+        QueueUrl=queue_url,
         MessageBody=json.dumps(m)
     )
 
@@ -34,17 +34,29 @@ def notify(m):
         raise Exception(json.dumps(res))
 
 
-def notify_start(job_id):
-    notify({"jobId": job_id, "stage": "chunk", "status": "STARTED"})
+def notify_start(queue_url, job_id):
+    notify(queue_url, {
+        "jobId": job_id,
+        "stage": "chunk",
+        "status": "STARTED"
+    })
 
 
-def notify_success(job_id):
-    notify({"jobId": job_id, "stage": "chunk", "status": "FINISHED"})
+def notify_success(queue_url, job_id):
+    notify(queue_url, {
+        "jobId": job_id,
+        "stage": "chunk",
+        "status": "FINISHED"
+    })
 
 
-def notify_failure(job_id, error_message):
-    notify({"jobId": job_id, "stage": "chunk", "status": "FAILED",
-            "error": error_message})
+def notify_failure(queue_url, job_id, error_message):
+    notify(queue_url, {
+        "jobId": job_id,
+        "stage": "chunk",
+        "status": "FAILED",
+        "error": error_message
+    })
 
 
 def get_filename(uri):
@@ -343,7 +355,7 @@ def construct_image_info(image_source):
     }
 
 
-def run_spark_job(tile_dim):
+def run_spark_job(tile_dim, args):
     from pyspark import SparkConf, SparkContext
     from pyspark.accumulators import AccumulatorParam
 
@@ -355,7 +367,7 @@ def run_spark_job(tile_dim):
         def zero(self, dummy):
             return []
 
-        def add_in_place(self, sources1, sources2):
+        def addInPlace(self, sources1, sources2):
             res = []
             if sources1:
                 res.extend(sources1)
@@ -363,30 +375,14 @@ def run_spark_job(tile_dim):
                 res.extend(sources2)
             return res
 
-    request_uri = sys.argv[1]
+    status_queue = args['--status-queue']
+    source_uris = args['<image>']
+    workspace = args['--workspace']
+    job_id = args['--job-id']
+    target = args['--target']
+    output_file = args['--output']
 
-    # If there's more arguements, its to turn off notifications
-    publish_notifications = True
-    if len(sys.argv) == 3:
-        publish_notifications = False
-
-    parsed_request_uri = urlparse(request_uri)
-    request = None
-    if not parsed_request_uri.scheme:
-        request = json.loads(open(request_uri).read())
-    else:
-        client = boto3.client("s3")
-        o = client.get_object(Bucket=parsed_request_uri.netloc,
-                              Key=parsed_request_uri.path[1:])
-        request = json.loads(o["Body"].read())
-
-    source_uris = request["images"]
-    workspace = request["workspace"]
-    job_id = request["jobId"]
-    target = request["target"]
-
-    if publish_notifications:
-        notify_start(job_id)
+    notify_start(status_queue, job_id)
 
     try:
         uri_sets = create_uri_sets(source_uris, workspace)
@@ -436,29 +432,57 @@ def run_spark_job(tile_dim):
         }
 
         # Save off result
-        workspace_parsed = urlparse(workspace)
-        if not workspace_parsed.scheme:
+        path_parsed = urlparse(output_file)
+        if not path_parsed.scheme:
             # Save to local files system
-            open(os.path.join(workspace, OUTPUT_FILE_NAME), 'w').write(
-                json.dumps(result))
-        elif workspace_parsed.scheme == "s3":
-            client = boto3.client("s3")
-
-            bucket = workspace_parsed.netloc
-            key = os.path.join(workspace_parsed.path, OUTPUT_FILE_NAME)[1:]
-
+            open(output_file, 'w').write(json.dumps(result))
+        elif path_parsed.scheme == 's3':
+            client = boto3.client('s3')
+            bucket = path_parsed.netloc
+            # Strip leading slash
+            key = path_parsed.path.strip('/')
             client.put_object(Bucket=bucket, Key=key, Body=json.dumps(result))
     except Exception, e:
-        if publish_notifications:
-            notify_failure(job_id, "%s: %s" % (type(e).__name__, e.message))
+        message = "%s: %s" % (type(e).__name__, e.message)
+        notify_failure(status_queue, job_id, message)
         raise
 
-    if publish_notifications:
-        notify_success(job_id)
+    notify_success(status_queue, job_id)
 
     print "Done."
 
-if __name__ == "__main__":
-    tile_dim = TILE_DIM
 
-    run_spark_job(tile_dim)
+def main():
+    """
+    Raster Foundry Tiler
+
+    Usage:
+      chunk.py --job-id=<id> --workspace=<path>  --target=<path>
+               --output=<file> [--status-queue=<sqs>] <image>...
+      chunk.py -h | --help
+      chunk.py --version
+
+    Arguments:
+      <image>  GeoTIFF path.
+
+    Options:
+      --job-id=<id>         Unique identifier (for status messages).
+      --workspace=<path>    Path where working copy of images will be stored.
+      --target=<path>       Path where tiles will be generated.
+      --status-queue=<sqs>  SQS endpoint where status messages will be posted.
+      -h --help             Show this screen.
+      --version             Show version.
+    """
+    from docopt import docopt
+    args = docopt(main.__doc__)
+
+    if args['--version']:
+        print('0.1')
+        exit()
+
+    tile_dim = TILE_DIM
+    run_spark_job(tile_dim, args)
+
+
+if __name__ == "__main__":
+    main()
