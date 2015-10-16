@@ -439,7 +439,8 @@ def run_spark_job(tile_dim, args):
         elif path_parsed.scheme == 's3':
             client = boto3.client('s3')
             bucket = path_parsed.netloc
-            key = path_parsed.path
+            # Strip leading slash
+            key = path_parsed.path.strip('/')
             client.put_object(Bucket=bucket, Key=key, Body=json.dumps(result))
     except Exception, e:
         message = "%s: %s" % (type(e).__name__, e.message)
