@@ -367,7 +367,7 @@ def run_spark_job(tile_dim, args):
         def zero(self, dummy):
             return []
 
-        def add_in_place(self, sources1, sources2):
+        def addInPlace(self, sources1, sources2):
             res = []
             if sources1:
                 res.extend(sources1)
