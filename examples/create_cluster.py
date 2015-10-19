@@ -105,6 +105,7 @@ def get_steps():
     ]
 
     chunk_result = 's3://raster-foundry-tiler/step1.json'
+    status_queue = 'http://sqs.us-east-1.amazonaws.com/123456789012/queue2'
 
     images = [
         's3://raster-foundry-tiler/test.tif',
@@ -127,7 +128,7 @@ def get_steps():
                     '--output',
                     chunk_result,
                     '--status-queue',
-                    'http://sqs.us-east-1.amazonaws.com/123456789012/queue2',
+                    status_queue,
                 ] + images
             }
         },
@@ -138,8 +139,10 @@ def get_steps():
                 'Jar': 'command-runner.jar',
                 'Args': spark_submit + [
                     '--class',
-                    'org.hotosm.oam.Main',
+                    'com.azavea.rasterfoundry.Main',
                     's3://raster-foundry-tiler/mosaic.jar',
+                    '--status-queue',
+                    status_queue,
                     chunk_result,
                 ]
             }
