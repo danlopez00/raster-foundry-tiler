@@ -6,10 +6,10 @@ import org.apache.spark._
 import org.apache.spark.rdd._
 import geotrellis.raster._
 import geotrellis.spark._
-
+import com.typesafe.scalalogging.slf4j._
 import spray.json._
 
-object Main {
+object Main extends LazyLogging {
   def getSparkContext(): SparkContext = {
     val conf =
       new SparkConf()
@@ -22,30 +22,28 @@ object Main {
   }
 
   def main(args: Array[String]): Unit = {
-    val publishNotifications =
-      args.length != 2
-
-    if(args.length < 1) {
-      sys.error("Argument error: must give the URI to the step1 result JSON.")
-    }
+    val config = ConfigParser.parse(args, Config()).getOrElse(sys.exit())
+    val status = new Status(config.statusQueue)        
+    logger.info(s"Status Queue: ${config.statusQueue}")
 
     val jobRequest = {
-      val uri = args(0)
+      val uri = config.chunkerResult
       new java.net.URI(uri).getScheme match {
         case null =>
-          scala.io.Source.fromFile(uri).getLines.mkString.parseJson.convertTo[JobRequest]
+        scala.io.Source.fromFile(uri).getLines.mkString.parseJson.convertTo[JobRequest]
         case _ =>
-          S3Client.default.readTextFile(uri).parseJson.convertTo[JobRequest]
+        S3Client.default.readTextFile(uri).parseJson.convertTo[JobRequest]
       }
     }
+    logger.info(s"Target: {jobRequest.target}")
 
-    if(publishNotifications) { Status.notifyStart(jobRequest.id) }
+    status.notifyStart(jobRequest.id)
 
     implicit val sc = getSparkContext()
 
     try {
       val inputImages: Seq[InputImageRDD] =
-        jobRequest.inputImages
+      jobRequest.inputImages
 
       val createSink: () => Sink = {
         val parsedTarget = new java.net.URI(jobRequest.target)
@@ -66,12 +64,12 @@ object Main {
       Tiler(inputImages)(createSink)
     } catch {
       case e: Exception =>
-        if(publishNotifications) { Status.notifyFailure(jobRequest.id, e) }
+        status.notifyFailure(jobRequest.id, e)
         throw e
     } finally {
       sc.stop
     }
 
-    if(publishNotifications) { Status.notifySuccess(jobRequest.id, jobRequest.target, jobRequest.inputImageDefinitions.map(_.sourceUri)) }
+    status.notifySuccess(jobRequest.id, jobRequest.target, jobRequest.inputImageDefinitions.map(_.sourceUri))
   }
 }

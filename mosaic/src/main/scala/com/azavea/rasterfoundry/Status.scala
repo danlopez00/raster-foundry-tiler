@@ -6,27 +6,17 @@ import com.amazonaws.services.sqs.model._
 import com.amazonaws.regions.Regions
 
 import org.apache.commons.io._
-import com.typesafe.config._
 import java.io.{InputStream, ByteArrayOutputStream, ByteArrayInputStream, DataInputStream }
 import scala.collection.JavaConverters._
 import scala.collection.mutable
+import com.typesafe.scalalogging.slf4j._
 
-object Status {
-  lazy val queueUrl = {
-    val config = ConfigFactory.load()
-    config.getString("rf.statusSqsQueueUrl")
-  }
-
-  lazy val sqsRegion = {
-    val config = ConfigFactory.load()
-    config.getString("rf.statusSqsRegion")
-  }
-
+class Status(val queueUrl: String) extends LazyLogging {
   def sendNotification(msg: String): Unit = {
-    val client = new AmazonSQSClient()
     val req = new SendMessageRequest(queueUrl, msg)
+    val client = new AmazonSQSClient()
     val result = client.sendMessage(req)
-    println("MessageId - " + result.getMessageId);
+    logger.info(s"MessageId: ${result.getMessageId}, Message: $msg");
   }
 
   def notifyStart(jobId: String): Unit =

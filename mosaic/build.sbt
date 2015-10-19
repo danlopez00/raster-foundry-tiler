@@ -31,6 +31,8 @@ libraryDependencies ++= Seq(
   "com.amazonaws" % "aws-java-sdk-s3" % "1.9.34",
   "com.amazonaws" % "aws-java-sdk-sqs" % "1.9.34",
   "com.azavea.geotrellis" %%  "geotrellis-testkit" % Version.geotrellis % "test",
+  "com.github.scopt" %% "scopt" % "3.3.0",
+  "com.typesafe.scala-logging" %% "scala-logging-slf4j" % "2.1.2",
   "org.scalatest" %%  "scalatest" % "2.2.0" % "test"
 )
 
